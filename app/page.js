@@ -4,6 +4,16 @@
 import { useEffect, useState } from 'react'
 import { supabase } from './supabase'
 
+const OWNER_ID = 'ff441acd-0b7b-4a8f-a521-2f2e4366ddd3'
+
+function getImages(value) {
+  try {
+    return Array.isArray(value) ? value : JSON.parse(value || '[]')
+  } catch {
+    return []
+  }
+}
+
 export default function Home() {
   const [user, setUser] = useState(null)
   const [email, setEmail] = useState('')
@@ -11,8 +21,12 @@ export default function Home() {
   const [content, setContent] = useState('')
   const [files, setFiles] = useState([])
   const [posts, setPosts] = useState([])
-  const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [selectedImages, setSelectedImages] = useState(null)
+  const [selectedIndex, setSelectedIndex] = useState(0)
+
+  const isOwner = user?.id === OWNER_ID
 
   async function loadPosts() {
     const { data, error } = await supabase
@@ -20,22 +34,17 @@ export default function Home() {
       .select('*')
       .order('created_at', { ascending: false })
 
-    if (error) {
-      setMessage(error.message)
-      return
-    }
-
-    setPosts(data || [])
+    if (!error) setPosts(data || [])
   }
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
-      setUser(data.session?.user ?? null)
+      setUser(data.session?.user || null)
     })
 
     const { data: listener } = supabase.auth.onAuthStateChange(
       (_event, session) => {
-        setUser(session?.user ?? null)
+        setUser(session?.user || null)
       }
     )
 
@@ -62,7 +71,6 @@ export default function Home() {
 
   async function publish(e) {
     e.preventDefault()
-
     if (!content.trim() && files.length === 0) return
 
     setLoading(true)
@@ -71,9 +79,10 @@ export default function Home() {
     try {
       const imageUrls = []
 
-      for (const file of files) {
-        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-        const path = `${user.id}/${Date.now()}-${safeName}`
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i]
+        const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, '-')
+        const path = `${user.id}/${Date.now()}-${i}-${safeName}`
 
         const { error: uploadError } = await supabase.storage
           .from('post-images')
@@ -99,130 +108,134 @@ export default function Home() {
 
       setContent('')
       setFiles([])
+      e.target.reset()
+      setMessage('Published!')
       await loadPosts()
-      setMessage('Published successfully ❤️')
     } catch (error) {
-      setMessage(error.message)
+      setMessage(error.message || 'Something went wrong')
     }
 
     setLoading(false)
   }
 
-  function getImages(value) {
-    try {
-      return JSON.parse(value || '[]')
-    } catch {
-      return []
+  function openGallery(images, index) {
+    setSelectedImages(images)
+    setSelectedIndex(index)
+  }
+
+  function closeGallery() {
+    setSelectedImages(null)
+  }
+
+  function changeImage(direction) {
+    setSelectedIndex(current =>
+      (current + direction + selectedImages.length) % selectedImages.length
+    )
+  }
+
+  function renderImages(images) {
+    if (!images.length) return null
+
+    const count = images.length
+
+    const gridStyle = {
+      display: 'grid',
+      gridTemplateColumns: count === 1 ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+      gridTemplateRows: count === 3 ? 'repeat(2, 1fr)' : 'auto',
+      gap: '5px',
+      overflow: 'hidden',
+      borderRadius: '13px',
+      marginTop: '13px'
     }
+
+    return (
+      <div style={gridStyle}>
+        {images.slice(0, 4).map((url, index) => {
+          const isSingle = count === 1
+          const isThreeMain = count === 3 && index === 0
+
+          return (
+            <div
+              key={index}
+              onClick={() => openGallery(images, index)}
+              style={{
+                position: 'relative',
+                overflow: 'hidden',
+                background: '#e9e5df',
+                cursor: 'pointer',
+                gridRow: isThreeMain ? 'span 2' : 'auto',
+                aspectRatio: isSingle ? 'auto' : isThreeMain ? '1 / 2' : '1 / 1',
+                minHeight: isSingle ? 0 : undefined
+              }}
+            >
+              <img
+                src={url}
+                alt="Diary photo"
+                loading="lazy"
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  height: isSingle ? 'auto' : '100%',
+                  maxHeight: isSingle ? '650px' : 'none',
+                  objectFit: isSingle ? 'contain' : 'cover'
+                }}
+              />
+            </div>
+          )
+        })}
+      </div>
+    )
   }
 
   return (
     <main style={{
       minHeight: '100vh',
-      background: '#f7f4ef',
-      color: '#292722',
-      padding: '55px 20px',
-      fontFamily: 'Georgia, serif'
+      background: '#f7f4ee',
+      color: '#29251f',
+      fontFamily: 'Georgia, serif',
+      padding: '35px 18px'
     }}>
-      <div style={{ maxWidth: 650, margin: 'auto' }}>
+      <div style={{ maxWidth: '620px', margin: '0 auto' }}>
 
-        <p style={{
-          fontSize: 11,
-          letterSpacing: 4,
-          color: '#999'
+        <header style={{
+          textAlign: 'center',
+          padding: '20px 0 35px',
+          borderBottom: '1px solid #e5dfd5'
         }}>
-          A PERSONAL DIARY
-        </p>
-
-        <h1 style={{
-          fontSize: 43,
-          fontWeight: 'normal',
-          margin: '18px 0 8px'
-        }}>
-          lilwff’s story
-        </h1>
-
-        <p style={{ color: '#888', marginBottom: 40 }}>
-          Little pieces of a life, collected in one place.
-        </p>
-
-        {user ? (
-          <form onSubmit={publish} style={{
-            border: '1px solid #e3ded5',
-            padding: 20,
-            borderRadius: 8,
-            marginBottom: 35
+          <div style={{
+            fontSize: '10px',
+            letterSpacing: '4px',
+            color: '#9b8d7a',
+            marginBottom: '15px'
           }}>
-            <textarea
-              value={content}
-              onChange={e => setContent(e.target.value)}
-              placeholder="What's on your mind?"
-              style={{
-                width: '100%',
-                minHeight: 110,
-                resize: 'vertical',
-                border: 'none',
-                outline: 'none',
-                background: 'transparent',
-                font: '17px Georgia',
-                color: '#292722'
-              }}
-            />
+            A PERSONAL DIARY
+          </div>
 
-            <input
-              type="file"
-              accept="image/*"
-              multiple
-              onChange={e => setFiles(Array.from(e.target.files || []))}
-              style={{ margin: '15px 0', maxWidth: '100%' }}
-            />
+          <h1 style={{
+            fontSize: '38px',
+            fontWeight: 'normal',
+            margin: 0,
+            letterSpacing: '-1px'
+          }}>
+            lilwff’s story
+          </h1>
+        </header>
 
-            <div style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center'
-            }}>
-              <span style={{ fontSize: 12, color: '#999' }}>
-                {files.length ? `${files.length} images selected` : 'Your diary'}
-              </span>
-
-              <button disabled={loading} style={{
-                background: '#292722',
-                color: 'white',
-                border: 'none',
-                padding: '11px 25px',
-                borderRadius: 30,
-                cursor: 'pointer'
-              }}>
-                {loading ? 'Publishing...' : 'Publish'}
-              </button>
-            </div>
-
-            <button type="button" onClick={logout} style={{
-              border: 'none',
-              background: 'transparent',
-              color: '#999',
-              marginTop: 15,
-              cursor: 'pointer'
-            }}>
-              Log out
-            </button>
-          </form>
-        ) : (
-          <details style={{ marginBottom: 35 }}>
+        {!user ? (
+          <details style={{ margin: '25px 0', textAlign: 'center' }}>
             <summary style={{
               cursor: 'pointer',
-              color: '#888',
-              fontSize: 13
+              color: '#9b8d7a',
+              fontSize: '13px'
             }}>
               Admin login
             </summary>
 
             <form onSubmit={login} style={{
-              padding: 18,
-              border: '1px solid #e3ded5',
-              borderRadius: 8,
-              marginTop: 15
+              display: 'grid',
+              gap: '10px',
+              maxWidth: '320px',
+              margin: '20px auto'
             }}>
               <input
                 type="email"
@@ -230,13 +243,7 @@ export default function Home() {
                 value={email}
                 onChange={e => setEmail(e.target.value)}
                 required
-                style={{
-                  display: 'block',
-                  width: '100%',
-                  padding: 12,
-                  marginBottom: 12,
-                  boxSizing: 'border-box'
-                }}
+                style={inputStyle}
               />
 
               <input
@@ -245,122 +252,248 @@ export default function Home() {
                 value={password}
                 onChange={e => setPassword(e.target.value)}
                 required
+                style={inputStyle}
+              />
+
+              <button style={buttonStyle}>Login</button>
+              {message && <p>{message}</p>}
+            </form>
+          </details>
+        ) : isOwner ? (
+          <section style={{
+            padding: '22px 0',
+            borderBottom: '1px solid #e5dfd5'
+          }}>
+            <form onSubmit={publish}>
+              <textarea
+                placeholder="Write something..."
+                value={content}
+                onChange={e => setContent(e.target.value)}
+                rows={4}
                 style={{
-                  display: 'block',
+                  ...inputStyle,
                   width: '100%',
-                  padding: 12,
-                  marginBottom: 12,
-                  boxSizing: 'border-box'
+                  resize: 'vertical',
+                  boxSizing: 'border-box',
+                  fontFamily: 'Georgia, serif',
+                  fontSize: '16px'
                 }}
               />
 
-              <button style={{
-                padding: '10px 22px',
-                background: '#292722',
-                color: 'white',
-                border: 'none',
-                borderRadius: 25
+              <div style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                gap: '10px',
+                marginTop: '12px',
+                flexWrap: 'wrap'
               }}>
-                Login
-              </button>
+                <label style={{
+                  cursor: 'pointer',
+                  color: '#887965',
+                  fontSize: '13px'
+                }}>
+                  + Add photos
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={e => setFiles(Array.from(e.target.files || []))}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  style={buttonStyle}
+                >
+                  {loading ? 'Publishing...' : 'Publish'}
+                </button>
+              </div>
+
+              {files.length > 0 && (
+                <p style={{ fontSize: '12px', color: '#887965' }}>
+                  {files.length} photo(s) selected
+                </p>
+              )}
+
+              {message && (
+                <p style={{ fontSize: '13px', color: '#887965' }}>
+                  {message}
+                </p>
+              )}
             </form>
-          </details>
-        )}
 
-        {message && (
-          <p style={{
-            color: '#888',
-            fontSize: 13,
-            marginBottom: 20,
-            overflowWrap: 'anywhere'
-          }}>
-            {message}
-          </p>
-        )}
-
-        <hr style={{
-          border: 'none',
-          borderTop: '1px solid #ddd',
-          margin: '30px 0'
-        }} />
-
-        {posts.length === 0 ? (
-          <p style={{
-            color: '#aaa',
-            textAlign: 'center',
-            padding: '60px 0'
-          }}>
-            The story begins here.
-          </p>
+            <div style={{ textAlign: 'right', marginTop: '12px' }}>
+              <button onClick={logout} style={smallButtonStyle}>
+                Log out
+              </button>
+            </div>
+          </section>
         ) : (
-          posts.map(post => {
+          <div style={{ textAlign: 'right', padding: '15px 0' }}>
+            <button onClick={logout} style={smallButtonStyle}>
+              Log out
+            </button>
+          </div>
+        )}
+
+        <section>
+          {posts.map(post => {
             const images = getImages(post.images)
 
             return (
               <article key={post.id} style={{
                 padding: '25px 0',
-                borderBottom: '1px solid #e3ded5'
+                borderBottom: '1px solid #e5dfd5'
               }}>
-                <p style={{
-                  whiteSpace: 'pre-wrap',
-                  fontSize: 17,
-                  lineHeight: 1.8,
-                  margin: '0 0 18px'
-                }}>
-                  {post.content}
-                </p>
-
-                {images.length > 0 && (
-                  <div style={{
-                    display: 'grid',
-                    gridTemplateColumns: images.length === 1
-                      ? '1fr'
-                      : 'repeat(2, minmax(0, 1fr))',
-                    gap: 5,
-                    overflow: 'hidden',
-                    borderRadius: 7
+                {post.content && (
+                  <p style={{
+                    fontSize: '16px',
+                    lineHeight: 1.8,
+                    whiteSpace: 'pre-wrap',
+                    margin: 0
                   }}>
-                    {images.map((url, index) => (
-                      <div key={index} style={{
-                        width: '100%',
-                        aspectRatio: images.length === 1 ? 'auto' : '1 / 1',
-                        overflow: 'hidden',
-                        background: '#e9e5df'
-                      }}>
-                        <img
-                          src={url}
-                          alt="Diary photo"
-                          loading="lazy"
-                          style={{
-                            display: 'block',
-                            width: '100%',
-                            height: images.length === 1 ? 'auto' : '100%',
-                            maxHeight: images.length === 1 ? 650 : 'none',
-                            objectFit: images.length === 1 ? 'contain' : 'cover'
-                          }}
-                        />
-                      </div>
-                    ))}
-                  </div>
+                    {post.content}
+                  </p>
                 )}
 
-                <p style={{
-                  color: '#aaa',
-                  fontSize: 11,
-                  marginTop: 15
+                {renderImages(images)}
+
+                <div style={{
+                  fontSize: '11px',
+                  color: '#a39787',
+                  marginTop: '14px',
+                  letterSpacing: '0.5px'
                 }}>
                   {new Date(post.created_at).toLocaleDateString('en-US', {
-                    year: 'numeric',
                     month: 'long',
-                    day: 'numeric'
+                    day: 'numeric',
+                    year: 'numeric'
                   })}
-                </p>
+                </div>
               </article>
             )
-          })
-        )}
-
+          })}
+        </section>
       </div>
+
+      {selectedImages && (
+        <div
+          onClick={closeGallery}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            background: 'rgba(0,0,0,0.94)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px'
+          }}
+        >
+          <button
+            onClick={closeGallery}
+            style={{
+              position: 'absolute',
+              top: '20px',
+              right: '22px',
+              color: 'white',
+              background: 'transparent',
+              border: 0,
+              fontSize: '30px',
+              cursor: 'pointer'
+            }}
+          >
+            ×
+          </button>
+
+          {selectedImages.length > 1 && (
+            <button
+              onClick={e => {
+                e.stopPropagation()
+                changeImage(-1)
+              }}
+              style={galleryArrowStyle}
+            >
+              ‹
+            </button>
+          )}
+
+          <img
+            src={selectedImages[selectedIndex]}
+            alt="Expanded diary photo"
+            onClick={e => e.stopPropagation()}
+            style={{
+              maxWidth: '90%',
+              maxHeight: '85vh',
+              objectFit: 'contain'
+            }}
+          />
+
+          {selectedImages.length > 1 && (
+            <button
+              onClick={e => {
+                e.stopPropagation()
+                changeImage(1)
+              }}
+              style={galleryArrowStyle}
+            >
+              ›
+            </button>
+          )}
+
+          <div style={{
+            position: 'absolute',
+            bottom: '20px',
+            color: 'white',
+            fontSize: '13px'
+          }}>
+            {selectedIndex + 1} / {selectedImages.length}
+          </div>
+        </div>
+      )}
     </main>
   )
+}
+
+const inputStyle = {
+  padding: '13px',
+  border: '1px solid #e5dfd5',
+  borderRadius: '8px',
+  background: '#fbfaf7',
+  color: '#29251f',
+  outline: 'none'
+}
+
+const buttonStyle = {
+  padding: '11px 22px',
+  border: 'none',
+  borderRadius: '25px',
+  background: '#29251f',
+  color: '#fff',
+  cursor: 'pointer',
+  fontFamily: 'Georgia, serif'
+}
+
+const smallButtonStyle = {
+  border: 'none',
+  background: 'transparent',
+  color: '#9b8d7a',
+  cursor: 'pointer',
+  fontFamily: 'Georgia, serif',
+  fontSize: '12px'
+}
+
+const galleryArrowStyle = {
+  background: 'rgba(255,255,255,0.15)',
+  border: 'none',
+  borderRadius: '50%',
+  color: 'white',
+  fontSize: '35px',
+  width: '45px',
+  height: '45px',
+  cursor: 'pointer',
+  margin: '0 10px'
 }
