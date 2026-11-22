@@ -293,49 +293,71 @@ export default function Home() {
             The story begins here.
           </p>
         ) : (
-          posts.map(post => (
-            <article key={post.id} style={{
-              padding: '25px 0',
-              borderBottom: '1px solid #e3ded5'
-            }}>
-              <p style={{
-                whiteSpace: 'pre-wrap',
-                fontSize: 17,
-                lineHeight: 1.8,
-                margin: '0 0 18px'
-              }}>
-                {post.content}
-              </p>
+          posts.map(post => {
+            const images = getImages(post.images)
 
-              {getImages(post.images).map((url, index) => (
-                <img
-                  key={index}
-                  src={url}
-                  alt="Diary photo"
-                  style={{
-                    width: '100%',
-                    height: 'auto',
-                    maxHeight: 500,
-                    objectFit: 'cover',
-                    borderRadius: 5,
-                    marginBottom: 10
-                  }}
-                />
-              ))}
-
-              <p style={{
-                color: '#aaa',
-                fontSize: 11,
-                marginTop: 15
+            return (
+              <article key={post.id} style={{
+                padding: '25px 0',
+                borderBottom: '1px solid #e3ded5'
               }}>
-                {new Date(post.created_at).toLocaleDateString('en-US', {
-                  year: 'numeric',
-                  month: 'long',
-                  day: 'numeric'
-                })}
-              </p>
-            </article>
-          ))
+                <p style={{
+                  whiteSpace: 'pre-wrap',
+                  fontSize: 17,
+                  lineHeight: 1.8,
+                  margin: '0 0 18px'
+                }}>
+                  {post.content}
+                </p>
+
+                {images.length > 0 && (
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: images.length === 1
+                      ? '1fr'
+                      : 'repeat(2, minmax(0, 1fr))',
+                    gap: 5,
+                    overflow: 'hidden',
+                    borderRadius: 7
+                  }}>
+                    {images.map((url, index) => (
+                      <div key={index} style={{
+                        width: '100%',
+                        aspectRatio: images.length === 1 ? 'auto' : '1 / 1',
+                        overflow: 'hidden',
+                        background: '#e9e5df'
+                      }}>
+                        <img
+                          src={url}
+                          alt="Diary photo"
+                          loading="lazy"
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            height: images.length === 1 ? 'auto' : '100%',
+                            maxHeight: images.length === 1 ? 650 : 'none',
+                            objectFit: images.length === 1 ? 'contain' : 'cover'
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <p style={{
+                  color: '#aaa',
+                  fontSize: 11,
+                  marginTop: 15
+                }}>
+                  {new Date(post.created_at).toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                  })}
+                </p>
+              </article>
+            )
+          })
         )}
 
       </div>
