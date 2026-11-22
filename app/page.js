@@ -16,7 +16,7 @@ export default function Home() {
           letterSpacing: "4px",
           color: "#999"
         }}>
-          A PERSONAL JOURNAL
+          A PERSONAL DIARY
         </p>
 
         <h1 style={{
