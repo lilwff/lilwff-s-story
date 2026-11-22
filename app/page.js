@@ -14,6 +14,11 @@ function getImages(value) {
   }
 }
 
+function getStoragePath(url) {
+  const marker = '/storage/v1/object/public/post-images/'
+  return url.includes(marker) ? decodeURIComponent(url.split(marker)[1]) : null
+}
+
 export default function Home() {
   const [user, setUser] = useState(null)
   const [email, setEmail] = useState('')
@@ -23,6 +28,12 @@ export default function Home() {
   const [posts, setPosts] = useState([])
   const [message, setMessage] = useState('')
   const [loading, setLoading] = useState(false)
+
+  const [editingPost, setEditingPost] = useState(null)
+  const [editContent, setEditContent] = useState('')
+  const [editImages, setEditImages] = useState([])
+  const [editFiles, setEditFiles] = useState([])
+
   const [selectedImages, setSelectedImages] = useState(null)
   const [selectedIndex, setSelectedIndex] = useState(0)
 
@@ -43,9 +54,7 @@ export default function Home() {
     })
 
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
-        setUser(session?.user || null)
-      }
+      (_event, session) => setUser(session?.user || null)
     )
 
     loadPosts()
@@ -69,6 +78,37 @@ export default function Home() {
     await supabase.auth.signOut()
   }
 
+  async function uploadFiles(selectedFiles) {
+    const urls = []
+
+    for (let i = 0; i < selectedFiles.length; i++) {
+      const file = selectedFiles[i]
+      const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, '-')
+      const path = `${user.id}/${Date.now()}-${i}-${safeName}`
+
+      const { error } = await supabase.storage
+        .from('post-images')
+        .upload(path, file)
+
+      if (error) throw error
+
+      const { data } = supabase.storage
+        .from('post-images')
+        .getPublicUrl(path)
+
+      urls.push(data.publicUrl)
+    }
+
+    return urls
+  }
+
+  async function removeStoredImages(urls) {
+    const paths = urls.map(getStoragePath).filter(Boolean)
+    if (paths.length) {
+      await supabase.storage.from('post-images').remove(paths)
+    }
+  }
+
   async function publish(e) {
     e.preventDefault()
     if (!content.trim() && files.length === 0) return
@@ -77,32 +117,12 @@ export default function Home() {
     setMessage('')
 
     try {
-      const imageUrls = []
+      const imageUrls = await uploadFiles(files)
 
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i]
-        const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, '-')
-        const path = `${user.id}/${Date.now()}-${i}-${safeName}`
-
-        const { error: uploadError } = await supabase.storage
-          .from('post-images')
-          .upload(path, file)
-
-        if (uploadError) throw uploadError
-
-        const { data } = supabase.storage
-          .from('post-images')
-          .getPublicUrl(path)
-
-        imageUrls.push(data.publicUrl)
-      }
-
-      const { error } = await supabase
-        .from('Posts')
-        .insert({
-          content: content.trim(),
-          images: JSON.stringify(imageUrls)
-        })
+      const { error } = await supabase.from('Posts').insert({
+        content: content.trim(),
+        images: JSON.stringify(imageUrls)
+      })
 
       if (error) throw error
 
@@ -115,6 +135,80 @@ export default function Home() {
       setMessage(error.message || 'Something went wrong')
     }
 
+    setLoading(false)
+  }
+
+  function startEditing(post) {
+    setEditingPost(post)
+    setEditContent(post.content || '')
+    setEditImages(getImages(post.images))
+    setEditFiles([])
+    setMessage('')
+  }
+
+  function cancelEditing() {
+    setEditingPost(null)
+    setEditContent('')
+    setEditImages([])
+    setEditFiles([])
+  }
+
+  async function saveEdit(e) {
+    e.preventDefault()
+    if (!editingPost) return
+
+    setLoading(true)
+    setMessage('')
+
+    try {
+      const newUrls = await uploadFiles(editFiles)
+      const finalImages = [...editImages, ...newUrls]
+
+      const { error } = await supabase
+        .from('Posts')
+        .update({
+          content: editContent.trim(),
+          images: JSON.stringify(finalImages)
+        })
+        .eq('id', editingPost.id)
+
+      if (error) throw error
+
+      const oldImages = getImages(editingPost.images)
+      const removedImages = oldImages.filter(url => !editImages.includes(url))
+
+      await removeStoredImages(removedImages)
+
+      cancelEditing()
+      await loadPosts()
+    } catch (error) {
+      setMessage(error.message || 'Something went wrong')
+    }
+
+    setLoading(false)
+  }
+
+  async function deletePost(post) {
+    const confirmed = window.confirm('Are you sure you want to delete this diary entry?')
+    if (!confirmed) return
+
+    setLoading(true)
+    setMessage('')
+
+    const { error } = await supabase
+      .from('Posts')
+      .delete()
+      .eq('id', post.id)
+
+    if (error) {
+      setMessage(error.message)
+      setLoading(false)
+      return
+    }
+
+    await removeStoredImages(getImages(post.images))
+    if (editingPost?.id === post.id) cancelEditing()
+    await loadPosts()
     setLoading(false)
   }
 
@@ -138,34 +232,30 @@ export default function Home() {
 
     const count = images.length
 
-    const gridStyle = {
-      display: 'grid',
-      gridTemplateColumns: count === 1 ? '1fr' : 'repeat(2, minmax(0, 1fr))',
-      gridTemplateRows: count === 3 ? 'repeat(2, 1fr)' : 'auto',
-      gap: '5px',
-      overflow: 'hidden',
-      borderRadius: '13px',
-      marginTop: '13px'
-    }
-
     return (
-      <div style={gridStyle}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: count === 1 ? '1fr' : 'repeat(2, minmax(0, 1fr))',
+        gridTemplateRows: count === 3 ? 'repeat(2, 1fr)' : 'auto',
+        gap: 5,
+        overflow: 'hidden',
+        borderRadius: 13,
+        marginTop: 13
+      }}>
         {images.slice(0, 4).map((url, index) => {
-          const isSingle = count === 1
-          const isThreeMain = count === 3 && index === 0
+          const single = count === 1
+          const main = count === 3 && index === 0
 
           return (
             <div
               key={index}
               onClick={() => openGallery(images, index)}
               style={{
-                position: 'relative',
                 overflow: 'hidden',
                 background: '#e9e5df',
                 cursor: 'pointer',
-                gridRow: isThreeMain ? 'span 2' : 'auto',
-                aspectRatio: isSingle ? 'auto' : isThreeMain ? '1 / 2' : '1 / 1',
-                minHeight: isSingle ? 0 : undefined
+                gridRow: main ? 'span 2' : 'auto',
+                aspectRatio: single ? 'auto' : main ? '1 / 2' : '1 / 1'
               }}
             >
               <img
@@ -175,9 +265,9 @@ export default function Home() {
                 style={{
                   display: 'block',
                   width: '100%',
-                  height: isSingle ? 'auto' : '100%',
-                  maxHeight: isSingle ? '650px' : 'none',
-                  objectFit: isSingle ? 'contain' : 'cover'
+                  height: single ? 'auto' : '100%',
+                  maxHeight: single ? 650 : 'none',
+                  objectFit: single ? 'contain' : 'cover'
                 }}
               />
             </div>
@@ -195,7 +285,7 @@ export default function Home() {
       fontFamily: 'Georgia, serif',
       padding: '35px 18px'
     }}>
-      <div style={{ maxWidth: '620px', margin: '0 auto' }}>
+      <div style={{ maxWidth: 620, margin: '0 auto' }}>
 
         <header style={{
           textAlign: 'center',
@@ -203,19 +293,19 @@ export default function Home() {
           borderBottom: '1px solid #e5dfd5'
         }}>
           <div style={{
-            fontSize: '10px',
-            letterSpacing: '4px',
+            fontSize: 10,
+            letterSpacing: 4,
             color: '#9b8d7a',
-            marginBottom: '15px'
+            marginBottom: 15
           }}>
             A PERSONAL DIARY
           </div>
 
           <h1 style={{
-            fontSize: '38px',
+            fontSize: 38,
             fontWeight: 'normal',
             margin: 0,
-            letterSpacing: '-1px'
+            letterSpacing: -1
           }}>
             lilwff’s story
           </h1>
@@ -226,15 +316,15 @@ export default function Home() {
             <summary style={{
               cursor: 'pointer',
               color: '#9b8d7a',
-              fontSize: '13px'
+              fontSize: 13
             }}>
               Admin login
             </summary>
 
             <form onSubmit={login} style={{
               display: 'grid',
-              gap: '10px',
-              maxWidth: '320px',
+              gap: 10,
+              maxWidth: 320,
               margin: '20px auto'
             }}>
               <input
@@ -276,7 +366,7 @@ export default function Home() {
                   resize: 'vertical',
                   boxSizing: 'border-box',
                   fontFamily: 'Georgia, serif',
-                  fontSize: '16px'
+                  fontSize: 16
                 }}
               />
 
@@ -284,14 +374,14 @@ export default function Home() {
                 display: 'flex',
                 justifyContent: 'space-between',
                 alignItems: 'center',
-                gap: '10px',
-                marginTop: '12px',
+                gap: 10,
+                marginTop: 12,
                 flexWrap: 'wrap'
               }}>
                 <label style={{
                   cursor: 'pointer',
                   color: '#887965',
-                  fontSize: '13px'
+                  fontSize: 13
                 }}>
                   + Add photos
                   <input
@@ -303,29 +393,23 @@ export default function Home() {
                   />
                 </label>
 
-                <button
-                  type="submit"
-                  disabled={loading}
-                  style={buttonStyle}
-                >
+                <button type="submit" disabled={loading} style={buttonStyle}>
                   {loading ? 'Publishing...' : 'Publish'}
                 </button>
               </div>
 
               {files.length > 0 && (
-                <p style={{ fontSize: '12px', color: '#887965' }}>
+                <p style={{ fontSize: 12, color: '#887965' }}>
                   {files.length} photo(s) selected
                 </p>
               )}
 
               {message && (
-                <p style={{ fontSize: '13px', color: '#887965' }}>
-                  {message}
-                </p>
+                <p style={{ fontSize: 13, color: '#887965' }}>{message}</p>
               )}
             </form>
 
-            <div style={{ textAlign: 'right', marginTop: '12px' }}>
+            <div style={{ textAlign: 'right', marginTop: 12 }}>
               <button onClick={logout} style={smallButtonStyle}>
                 Log out
               </button>
@@ -333,46 +417,164 @@ export default function Home() {
           </section>
         ) : (
           <div style={{ textAlign: 'right', padding: '15px 0' }}>
-            <button onClick={logout} style={smallButtonStyle}>
-              Log out
-            </button>
+            <button onClick={logout} style={smallButtonStyle}>Log out</button>
           </div>
         )}
 
         <section>
           {posts.map(post => {
             const images = getImages(post.images)
+            const isEditing = editingPost?.id === post.id
 
             return (
               <article key={post.id} style={{
                 padding: '25px 0',
                 borderBottom: '1px solid #e5dfd5'
               }}>
-                {post.content && (
-                  <p style={{
-                    fontSize: '16px',
-                    lineHeight: 1.8,
-                    whiteSpace: 'pre-wrap',
-                    margin: 0
-                  }}>
-                    {post.content}
-                  </p>
+                {isEditing ? (
+                  <form onSubmit={saveEdit}>
+                    <textarea
+                      value={editContent}
+                      onChange={e => setEditContent(e.target.value)}
+                      rows={5}
+                      placeholder="Write something..."
+                      style={{
+                        ...inputStyle,
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        resize: 'vertical',
+                        fontFamily: 'Georgia, serif',
+                        fontSize: 16
+                      }}
+                    />
+
+                    <div style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                      gap: 8,
+                      marginTop: 12
+                    }}>
+                      {editImages.map((url, index) => (
+                        <div key={url} style={{ position: 'relative' }}>
+                          <img
+                            src={url}
+                            alt="Existing photo"
+                            style={{
+                              width: '100%',
+                              aspectRatio: '1 / 1',
+                              objectFit: 'cover',
+                              borderRadius: 9
+                            }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setEditImages(old =>
+                              old.filter((_, i) => i !== index)
+                            )}
+                            style={removeButtonStyle}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <label style={{
+                      display: 'inline-block',
+                      marginTop: 14,
+                      color: '#887965',
+                      fontSize: 13,
+                      cursor: 'pointer'
+                    }}>
+                      + Add more photos
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        onChange={e => setEditFiles(Array.from(e.target.files || []))}
+                        style={{ display: 'none' }}
+                      />
+                    </label>
+
+                    {editFiles.length > 0 && (
+                      <p style={{ fontSize: 12, color: '#887965' }}>
+                        {editFiles.length} new photo(s) selected
+                      </p>
+                    )}
+
+                    <div style={{
+                      display: 'flex',
+                      gap: 10,
+                      marginTop: 15
+                    }}>
+                      <button type="submit" disabled={loading} style={buttonStyle}>
+                        {loading ? 'Saving...' : 'Save changes'}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={cancelEditing}
+                        style={smallButtonStyle}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <>
+                    {post.content && (
+                      <p style={{
+                        fontSize: 16,
+                        lineHeight: 1.8,
+                        whiteSpace: 'pre-wrap',
+                        margin: 0
+                      }}>
+                        {post.content}
+                      </p>
+                    )}
+
+                    {renderImages(images)}
+
+                    <div style={{
+                      fontSize: 11,
+                      color: '#a39787',
+                      marginTop: 14,
+                      letterSpacing: 0.5
+                    }}>
+                      {new Date(post.created_at).toLocaleDateString('en-US', {
+                        month: 'long',
+                        day: 'numeric',
+                        year: 'numeric'
+                      })}
+                    </div>
+
+                    {isOwner && (
+                      <div style={{
+                        display: 'flex',
+                        gap: 18,
+                        marginTop: 12
+                      }}>
+                        <button
+                          onClick={() => startEditing(post)}
+                          style={smallButtonStyle}
+                        >
+                          Edit
+                        </button>
+
+                        <button
+                          onClick={() => deletePost(post)}
+                          disabled={loading}
+                          style={{
+                            ...smallButtonStyle,
+                            color: '#a45c52'
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
-
-                {renderImages(images)}
-
-                <div style={{
-                  fontSize: '11px',
-                  color: '#a39787',
-                  marginTop: '14px',
-                  letterSpacing: '0.5px'
-                }}>
-                  {new Date(post.created_at).toLocaleDateString('en-US', {
-                    month: 'long',
-                    day: 'numeric',
-                    year: 'numeric'
-                  })}
-                </div>
               </article>
             )
           })}
@@ -390,19 +592,19 @@ export default function Home() {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: '20px'
+            padding: 20
           }}
         >
           <button
             onClick={closeGallery}
             style={{
               position: 'absolute',
-              top: '20px',
-              right: '22px',
+              top: 20,
+              right: 22,
               color: 'white',
               background: 'transparent',
               border: 0,
-              fontSize: '30px',
+              fontSize: 30,
               cursor: 'pointer'
             }}
           >
@@ -446,9 +648,9 @@ export default function Home() {
 
           <div style={{
             position: 'absolute',
-            bottom: '20px',
+            bottom: 20,
             color: 'white',
-            fontSize: '13px'
+            fontSize: 13
           }}>
             {selectedIndex + 1} / {selectedImages.length}
           </div>
@@ -459,9 +661,9 @@ export default function Home() {
 }
 
 const inputStyle = {
-  padding: '13px',
+  padding: 13,
   border: '1px solid #e5dfd5',
-  borderRadius: '8px',
+  borderRadius: 8,
   background: '#fbfaf7',
   color: '#29251f',
   outline: 'none'
@@ -470,7 +672,7 @@ const inputStyle = {
 const buttonStyle = {
   padding: '11px 22px',
   border: 'none',
-  borderRadius: '25px',
+  borderRadius: 25,
   background: '#29251f',
   color: '#fff',
   cursor: 'pointer',
@@ -483,7 +685,7 @@ const smallButtonStyle = {
   color: '#9b8d7a',
   cursor: 'pointer',
   fontFamily: 'Georgia, serif',
-  fontSize: '12px'
+  fontSize: 12
 }
 
 const galleryArrowStyle = {
@@ -491,9 +693,23 @@ const galleryArrowStyle = {
   border: 'none',
   borderRadius: '50%',
   color: 'white',
-  fontSize: '35px',
-  width: '45px',
-  height: '45px',
+  fontSize: 35,
+  width: 45,
+  height: 45,
   cursor: 'pointer',
   margin: '0 10px'
+}
+
+const removeButtonStyle = {
+  position: 'absolute',
+  top: 6,
+  right: 6,
+  width: 27,
+  height: 27,
+  border: 'none',
+  borderRadius: '50%',
+  background: 'rgba(0,0,0,0.7)',
+  color: 'white',
+  fontSize: 20,
+  cursor: 'pointer'
 }
